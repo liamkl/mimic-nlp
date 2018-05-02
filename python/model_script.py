@@ -26,19 +26,23 @@ NOTEEVENTS = "./data/NOTEEVENTS.csv"
 DIAGNOSES_ICD = "./data/DIAGNOSES_ICD.csv"
 EMBEDDING_MODEL = 'w2v' # 'w2v' or 'ft'
 ICD_CODES = ["4019","4280","42731", "41401", "5849"] # ICD codes of interest
-SEQ_LEN = 5000 # Max length of note
+SEQ_LEN = 3000 # Max length of note
+MAX_WORDS = 50000
 
 SUBSAMPLE_SIZE = 10000
 TEST_SET_FRACTION = 0.2
-BATCH_SIZE = 64
+BATCH_SIZE = 128
+TRAINING_EPOCHS = 5
 MODEL_SAVE_PATH = './models/model_20180501_liam' # Path to save trained model to
 #######################################################
+
 
 def clean_string1(text):
     """
     """
     text = text.strip().lower().replace('-', '_').replace('.', '_').replace(' ', '_').rstrip('_')
     return text
+
 
 def preprocess_text2(query):
     """
@@ -51,11 +55,13 @@ def preprocess_text2(query):
     word_list = [clean_string1(word) for word in word_list]
     return word_list
 
+
 if EMBEDDING_MODEL == 'w2v':
     word_vectors = Word2Vec.load('./data/w2v_embeddings')
 else:
-    word_vectors = FastText.load('fasttext_embeddings')
+    word_vectors = FastText.load('./data/fasttext_embeddings')
 embedding_dim = word_vectors.wv.vectors.shape[1]
+
 
 df1 = pd.read_csv(DIAGNOSES_ICD)
 df2 = pd.read_csv(NOTEEVENTS)
@@ -98,7 +104,7 @@ Takes words and converts to indices (which then correspond to vectors in
 the embedding models)
 '''
 #max_words = len(word_vectors.wv.vocab)
-max_words = 15000
+max_words = MAX_WORDS
 token = Tokenizer(max_words)
 token.fit_on_texts(input_notes)
 vocab_size = max_words + 1
@@ -158,7 +164,7 @@ x = ClipLayer(x)
 model = Model(input, x)
 
 model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-model.fit(X, y_train, epochs=20, batch_size=BATCH_SIZE)
+model.fit(X, y_train, epochs=TRAINING_EPOCHS, batch_size=BATCH_SIZE)
 
 model.save(MODEL_SAVE_PATH)
 
