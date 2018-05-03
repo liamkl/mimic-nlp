@@ -17,6 +17,8 @@ from keras.layers.recurrent import LSTM, GRU
 import matplotlib.pyplot as plt
 import pandas as pd
 
+import tensorflow as tf
+
 
 #######################################################
 '''
@@ -29,11 +31,11 @@ ICD_CODES = ["4019","4280","42731", "41401", "5849"] # ICD codes of interest
 SEQ_LEN = 3000 # Max length of note
 MAX_WORDS = 50000
 
-SUBSAMPLE_SIZE = 10000
+SUBSAMPLE_SIZE = 20000
 TEST_SET_FRACTION = 0.2
 BATCH_SIZE = 128
 TRAINING_EPOCHS = 5
-MODEL_SAVE_PATH = './models/model_20180501_liam' # Path to save trained model to
+MODEL_SAVE_PATH = './models/model_20180502_01_liam' # Path to save trained model to
 #######################################################
 
 
@@ -142,9 +144,73 @@ num_classes = y_train.shape[1]
 
 import keras.backend as K
 
+def precision(y_true, y_pred):
+    # Calculates the precision
+    true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+    predicted_positives = K.sum(K.round(K.clip(y_pred, 0, 1)))
+    precision = true_positives / (predicted_positives + K.epsilon())
+    return precision
+
+
+def recall(y_true, y_pred):
+    # Calculates the recall
+    true_positives = K.sum(K.round(K.clip(y_true * y_pred, 0, 1)))
+    possible_positives = K.sum(K.round(K.clip(y_true, 0, 1)))
+    recall = true_positives / (possible_positives + K.epsilon())
+    return recall
+
+def calculate_class_weights(Y):
+    '''
+    input: np array of labels
+    output: dict of multilabel class weights
+    '''
+    l_weights = []
+    c_weights = []
+    for i in range(y.shape[1]):
+        neg = len(y[y[:,i] == 0, i])
+        pos = len(y) - neg
+        neg_ratio = neg / pos
+        l_weights.append(neg_ratio)
+        c_weights.append({0: 1, 1: neg_ratio})
+    return tf.constant(l_weights), c_weights
+
+loss_weights, class_weights = calculate_class_weights(y_train)
+
 # config = K.tf.ConfigProto()
 # config.gpu_options.allow_growth = True
 # session = K.tf.Session(config=config)
+
+def _to_tensor(x, dtype):
+    """Convert the input `x` to a tensor of type `dtype`.
+    # Arguments
+        x: An object to be converted (numpy array, list, tensors).
+        dtype: The destination type.
+    # Returns
+        A tensor.
+    """
+    return tf.convert_to_tensor(x, dtype=dtype)
+
+
+def weighted_binary_crossentropy(target, output, from_logits=False):
+  """Binary crossentropy between an output tensor and a target tensor.
+  Arguments:
+      output: A tensor.
+      target: A tensor with the same shape as `output`.
+      from_logits: Whether `output` is expected to be a logits tensor.
+          By default, we consider that `output`
+          encodes a probability distribution.
+  Returns:
+      A tensor.
+  """
+  # Note: nn.softmax_cross_entropy_with_logits
+  # expects logits, Keras expects probabilities.
+  if not from_logits:
+    # transform back to logits
+    epsilon = _to_tensor(K.epsilon(), output.dtype.base_dtype)
+    output = tf.clip_by_value(output, epsilon, 1 - epsilon)
+    output = tf.log(output / (1 - output))
+  return tf.nn.weighted_cross_entropy_with_logits(target, output, pos_weight=loss_weights)
+
 
 from keras.layers import Lambda
 ClipLayer = Lambda(lambda x: K.clip(x, min_value=0.01, max_value=0.99))
@@ -153,8 +219,8 @@ ClipLayer = Lambda(lambda x: K.clip(x, min_value=0.01, max_value=0.99))
 input = Input(shape=(seq_len,))
 x = Embedding(input_dim=vocab_size, output_dim=embedding_dim, weights=[embedding_matrix], trainable=False)(input)
 x = GaussianNoise(0.75)(x)
-x = Bidirectional(GRU(units=128, recurrent_dropout=0.2, dropout=0.2, activation = 'relu', return_sequences=True))(x)
-x = Bidirectional(GRU(units=128, recurrent_dropout=0.2, dropout=0.2, activation = 'relu'))(x)
+x = Bidirectional(GRU(units=128, recurrent_dropout=0.2, dropout=0.2, activation='relu', return_sequences=True))(x)
+x = Bidirectional(GRU(units=128, recurrent_dropout=0.2, dropout=0.2, activation='relu'))(x)
 x = Dense(128, activation='relu')(x)
 x = Dropout(0.5)(x)
 x = Dense(128, activation='relu')(x)
@@ -163,11 +229,17 @@ x = Dense(num_classes, activation='sigmoid')(x)
 x = ClipLayer(x)
 model = Model(input, x)
 
-model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-model.fit(X, y_train, epochs=TRAINING_EPOCHS, batch_size=BATCH_SIZE)
+model.compile(optimizer='adam',
+              loss=weighted_binary_crossentropy,
+              weighted_metrics=['binary_accuracy', precision, recall])
+
+model.fit(X, y_train,
+          epochs=TRAINING_EPOCHS,
+          batch_size=BATCH_SIZE,
+          class_weight=class_weights)
 
 model.save(MODEL_SAVE_PATH)
 
-model.predict(X_test, y_test, batch_size=256)
+model.predict(X_test, y_test)
 
 
